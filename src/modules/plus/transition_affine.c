@@ -1,6 +1,6 @@
 /*
  * transition_affine.c -- affine transformations
- * Copyright (C) 2003-2022 Meltytech, LLC
+ * Copyright (C) 2003-2023 Meltytech, LLC
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -131,7 +131,7 @@ static void affine_rotate_x(double affine[3][3], double angle)
 {
     double matrix[3][3];
     matrix[0][0] = cos(angle * M_PI / 180);
-    matrix[0][1] = 0 - sin(angle * M_PI / 180);
+    matrix[0][1] = -sin(angle * M_PI / 180);
     matrix[0][2] = 0;
     matrix[1][0] = sin(angle * M_PI / 180);
     matrix[1][1] = cos(angle * M_PI / 180);
@@ -147,7 +147,7 @@ static void affine_rotate_y(double affine[3][3], double angle)
     double matrix[3][3];
     matrix[0][0] = cos(angle * M_PI / 180);
     matrix[0][1] = 0;
-    matrix[0][2] = 0 - sin(angle * M_PI / 180);
+    matrix[0][2] = -sin(angle * M_PI / 180);
     matrix[1][0] = 0;
     matrix[1][1] = 1;
     matrix[1][2] = 0;
@@ -335,7 +335,6 @@ struct sliced_desc
     double dz, mix;
     double x_offset, y_offset;
     int b_alpha;
-    double minima, xmax, ymax;
 };
 
 static int sliced_proc(int id, int index, int jobs, void *cookie)
@@ -353,7 +352,7 @@ static int sliced_proc(int id, int index, int jobs, void *cookie)
             for (j = 0, x = ctx.lower_x; j < ctx.a_width; j++, x++) {
                 dx = MapX(ctx.affine.matrix, x, y) / ctx.dz + ctx.x_offset;
                 dy = MapY(ctx.affine.matrix, x, y) / ctx.dz + ctx.y_offset;
-                if (dx >= ctx.minima && dx <= ctx.xmax && dy >= ctx.minima && dy <= ctx.ymax)
+                if (dx >= 0 && dx < ctx.b_width && dy >= 0 && dy < ctx.b_height)
                     ctx.interp(ctx.b_image,
                                ctx.b_width,
                                ctx.b_height,
@@ -587,11 +586,7 @@ static int transition_get_image(mlt_frame a_frame,
                                    .mix = result.o,
                                    .x_offset = (double) b_real_width / 2.0,
                                    .y_offset = (double) b_real_height / 2.0,
-                                   .b_alpha = mlt_properties_get_int(properties, "b_alpha"),
-                                   // Affine boundaries
-                                   .minima = 0,
-                                   .xmax = b_real_width - 1,
-                                   .ymax = b_real_height - 1};
+                                   .b_alpha = mlt_properties_get_int(properties, "b_alpha")};
 
         // Recalculate vars if alignment supplied.
         if (mlt_properties_get(properties, "halign") || mlt_properties_get(properties, "valign")) {
@@ -599,8 +594,8 @@ static int transition_get_image(mlt_frame a_frame,
             double valign = alignment_parse(mlt_properties_get(properties, "valign"));
             desc.x_offset = halign * desc.b_width / 2.0;
             desc.y_offset = valign * desc.b_height / 2.0;
-            desc.lower_x = -(result.x + geometry_w * halign / 2.0f);
-            desc.lower_y = -(result.y + geometry_h * valign / 2.0f);
+            desc.lower_x = -(result.x + geometry_w * halign / 2.0);
+            desc.lower_y = -(result.y + geometry_h * valign / 2.0);
         }
 
         affine_init(desc.affine.matrix);
@@ -657,21 +652,14 @@ static int transition_get_image(mlt_frame a_frame,
         if (interps == NULL || strcmp(interps, "nearest") == 0 || strcmp(interps, "neighbor") == 0
             || strcmp(interps, "tiles") == 0 || strcmp(interps, "fast_bilinear") == 0) {
             desc.interp = interpNN_b32;
-            // uses lrintf. Values should be >= -0.5 and < max + 0.5
-            desc.minima -= 0.5;
-            desc.xmax += 0.49;
-            desc.ymax += 0.49;
         } else if (strcmp(interps, "bilinear") == 0) {
             desc.interp = interpBL_b32;
-            // uses floorf.
         } else if (strcmp(interps, "bicubic") == 0 || strcmp(interps, "hyper") == 0
                    || strcmp(interps, "sinc") == 0 || strcmp(interps, "lanczos") == 0
                    || strcmp(interps, "spline") == 0) {
             // TODO: lanczos 8x8
             // TODO: spline 4x4 or 6x6
-            desc.interp = interpBC_b32;
-            // uses ceilf. Values should be > -1 and <= max.
-            desc.minima -= 1;
+            desc.interp = interpBL_b32;//interpBC_b32;
         }
         free(interps);
 

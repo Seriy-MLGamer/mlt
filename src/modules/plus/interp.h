@@ -1,7 +1,7 @@
 //interp.c
 /*
  * Copyright (C) 2010 Marko Cebokli   http://lea.hamradio.si/~s57uuu
- * Copyright (C) 2010-2022 Meltytech, LLC
+ * Copyright (C) 2010-2023 Meltytech, LLC
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 
 #include <inttypes.h>
 #include <math.h>
+#include <string.h>
 #include <stdio.h>
 
 //#define TEST_XY_LIMITS
@@ -44,12 +45,12 @@ int interpNN_b32(
     unsigned char *s, int w, int h, float x, float y, float o, unsigned char *d, int is_atop)
 {
 #ifdef TEST_XY_LIMITS
-    if ((x < 0) || (x >= w) || (y < 0) || (y >= h))
+    if (x < 0 || x >= w || y < 0 || y >= h)
         return -1;
 #endif
-    int p = (int) rintf(x) * 4 + (int) rintf(y) * 4 * w;
-    float alpha_s = (float) s[p + 3] / 255.0f * o;
-    float alpha_d = (float) d[3] / 255.0f;
+    int p = 4 * ((int) x + (int) y * w);
+    float alpha_s = s[p + 3] / 255.0f * o;
+    float alpha_d = d[3] / 255.0f;
     float alpha = alpha_s + alpha_d - alpha_s * alpha_d;
     d[3] = is_atop ? s[p + 3] : (255 * alpha);
     alpha = alpha_s / alpha;
@@ -65,34 +66,83 @@ int interpNN_b32(
 int interpBL_b32(
     unsigned char *s, int w, int h, float x, float y, float o, unsigned char *d, int is_atop)
 {
-    int m, n, k, l, n1, l1, k1;
-    float a, b;
-
 #ifdef TEST_XY_LIMITS
-    if ((x < 0) || (x >= w) || (y < 0) || (y >= h))
+    if (x < 0 || x >= w || y < 0 || y >= h)
         return -1;
 #endif
 
-    m = (int) floorf(x);
-    if (m + 2 > w)
-        m = w - 2;
-    n = (int) floorf(y);
-    if (n + 2 > h)
-        n = h - 2;
+    int m = (int) (x + 0.5f) - 1;
+    int n = (int) (y + 0.5f) - 1;
+    unsigned char S[16];
+    if (m >= 0 && n >= 0) {
+        if (m + 1 < w && n + 1 < h) {
+            int k = 4 * (m + w * n);
+            memcpy(S, s + k, 8);
+            memcpy(S + 8, s + (k + 4 * w), 8);
+        }
+        else if (n + 1 < h) {
+            int k = w - 1 + w * n;
+            *(int *) S = ((int *) s)[k];
+            ((int *) S)[1] = *(int *) S;
+            ((int *) S)[2] = ((int *) s)[k + w];
+            ((int *) S)[3] = ((int *) S)[2];
+        }
+        else if (m + 1 < w) {
+            memcpy(S, s + 4 * (m + w * (h - 1)), 8);
+            memcpy(S + 8, S, 8);
+        }
+        else {
+            int a = ((int *) s)[w * h - 1];
+            *(int *) S = a;
+            ((int *) S)[1] = a;
+            ((int *) S)[2] = a;
+            ((int *) S)[3] = a;
+        }
+    }
+    else if (n >= 0) {
+        if (n + 1 < h) {
+            *(int *) S = ((int *) s)[w * n];
+            ((int *) S)[1] = *(int *) S;
+            ((int *) S)[2] = ((int *) s)[w * (n + 1)];
+            ((int *) S)[3] = ((int *) S)[2];
+        }
+        else {
+            int a = ((int *) s)[w * (h - 1)];
+            *(int *) S = a;
+            ((int *) S)[1] = a;
+            ((int *) S)[2] = a;
+            ((int *) S)[3] = a;
+        }
+    }
+    else if (m >= 0) {
+        if (m + 1 < w) {
+            memcpy(S, s + 4 * m, 8);
+            memcpy(S + 8, S, 8);
+        }
+        else {
+            int a = ((int *) s)[w - 1];
+            *(int *) S = a;
+            ((int *) S)[1] = a;
+            ((int *) S)[2] = a;
+            ((int *) S)[3] = a;
+        }
+    }
+    else {
+        int a = *(int *) s;
+        *(int *) S = a;
+        ((int *) S)[1] = a;
+        ((int *) S)[2] = a;
+        ((int *) S)[3] = a;
+    }
 
-    k = n * w + m;
-    l = (n + 1) * w + m;
-    k1 = 4 * (k + 1);
-    l1 = 4 * (l + 1);
-    n1 = 4 * ((n + 1) * w + m);
-    l = 4 * l;
-    k = 4 * k;
+    float dx = x - 0.5f - m;
+    float dy = y - 0.5f - n;
 
-    a = s[k + 3] + (s[k1 + 3] - s[k + 3]) * (x - (float) m);
-    b = s[l + 3] + (s[l1 + 3] - s[n1 + 3]) * (x - (float) m);
+    float a = S[3] + (S[7] - S[3]) * dx;
+    float b = S[11] + (S[15] - S[11]) * dx;
 
-    float alpha_s = a + (b - a) * (y - (float) n);
-    float alpha_d = (float) d[3] / 255.0f;
+    float alpha_s = a + (b - a) * dy;
+    float alpha_d = d[3] / 255.0f;
     if (is_atop)
         d[3] = alpha_s;
     alpha_s = alpha_s / 255.0f * o;
@@ -101,17 +151,17 @@ int interpBL_b32(
         d[3] = 255 * alpha;
     alpha = alpha_s / alpha;
 
-    a = s[k] + (s[k1] - s[k]) * (x - (float) m);
-    b = s[l] + (s[l1] - s[n1]) * (x - (float) m);
-    d[0] = d[0] * (1.0f - alpha) + (a + (b - a) * (y - (float) n)) * alpha;
+    a = *S + (S[4] - *S) * dx;
+    b = S[8] + (S[12] - S[8]) * dx;
+    *d = *d * (1.0f - alpha) + (a + (b - a) * dy) * alpha;
 
-    a = s[k + 1] + (s[k1 + 1] - s[k + 1]) * (x - (float) m);
-    b = s[l + 1] + (s[l1 + 1] - s[n1 + 1]) * (x - (float) m);
-    d[1] = d[1] * (1.0f - alpha) + (a + (b - a) * (y - (float) n)) * alpha;
+    a = S[1] + (S[5] - S[1]) * dx;
+    b = S[9] + (S[13] - S[9]) * dx;
+    d[1] = d[1] * (1.0f - alpha) + (a + (b - a) * dy) * alpha;
 
-    a = s[k + 2] + (s[k1 + 2] - s[k + 2]) * (x - (float) m);
-    b = s[l + 2] + (s[l1 + 2] - s[n1 + 2]) * (x - (float) m);
-    d[2] = d[2] * (1.0f - alpha) + (a + (b - a) * (y - (float) n)) * alpha;
+    a = S[2] + (S[6] - S[2]) * dx;
+    b = S[10] + (S[14] - S[10]) * dx;
+    d[2] = d[2] * (1.0f - alpha) + (a + (b - a) * dy) * alpha;
 
     return 0;
 }
